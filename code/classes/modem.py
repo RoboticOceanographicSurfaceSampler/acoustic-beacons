@@ -68,10 +68,14 @@ class Modem:
     # ======================================================
     def __init__(self, mode=None, args=None):
 
+
+
+        self.clientIP = None
+
         # self.lock = Lock()
 
         self.port = settings['serial_beacon']
-
+        
         # sleep for 6 seconds to give the beacon time to load
         time.sleep(6)
 
@@ -315,6 +319,27 @@ class Modem:
         cmd = "$P%03d" % (target)
         return self.send(cmd=cmd, prefix=["P", "R"], n=2, wait=wait)
 
+
+    def send_client(self, msg):
+        """ Send a message to a client"""
+        log_full.info('sending to client socket')
+        
+        if self.clientIP is not None:
+            try:
+                HOST = self.clientIP
+                PORT = 4001
+                s = socket.socket()
+                s.connect((HOST, PORT))
+                s.send(msg.encode())
+                s.close()
+
+            except Exception as e:
+                print(e)
+                print(HOST)
+                print(port)
+
+
+
     # ======================================================
     # Processing threads
     # ======================================================
@@ -384,6 +409,7 @@ class Modem:
                             log_full.info("Unicast message received: %s" % (data,))
                             line = str(data)
                             log_unicast.info(line)
+                            self.send_client(data)
                             send_socket(self.output_port, data)
                         elif msg['type'] == 'range':
                             log_full.debug('Got range message.')
@@ -483,8 +509,9 @@ class Modem:
 
         except Exception as e:
             logging.debug(e)
-
+ 
         log_full.info('Active listening ended.')
+
 
     def passive_listen(self):
         "Parse and forward any broadcasts/unicasts received"
@@ -716,21 +743,34 @@ class Modem:
         log_full.debug('Starting monitor_for_input thread.')
 
         PORT = self.input_port
-        HOST = '127.0.0.1'
+        HOST = '192.168.2.2'
         MAX_LENGTH = 4096
 
         log_full.debug('Opening input socket.')
         serversocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        serversocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         serversocket.bind((HOST, PORT))
         log_full.debug('Bound to socket %s' % (serversocket))
         serversocket.listen(5)
 
+
+
         while True:
             # accept connections from outside
             (clientsocket, address) = serversocket.accept()
-            log_full.debug('Client socket connected.')
 
             msg = clientsocket.recv(MAX_LENGTH)
+
+            clientIP, clientPort = address            
+            self.clientIP = clientIP
+
+            log_full.debug('Client socket connected: ' + clientIP)
+           
+            self.send_client("ping")
+
+
+
+
             if msg == '':  # client terminated connection
                 clientsocket.close()
                 log_full.debug('Client socket closed.')
@@ -747,12 +787,16 @@ class Modem:
         log_full.debug('Managing input.')
         log_full.debug(msg)
 
-        split_msg = msg.split(' ', 1)
-        target = int(split_msg[0])
-        cmd = split_msg[1]
-        log_full.debug('Sending unicast command.')
-        self.unicast(cmd, target)
-        log_full.debug('Done managing input.')
+
+        try: 
+            split_msg = msg.split(' ', 1)
+            target = int(split_msg[0])
+            cmd = split_msg[1]
+            log_full.debug('Trying to unicast.')
+            self.unicast(cmd, target)
+            log_full.debug('Done managing input.')
+        except:
+            self.send_client("Bad input")
 
     def gps_forward(self):
         """Periodically forward current position to PixHawk
@@ -860,8 +904,6 @@ class Modem:
                     datacast_thread = Thread(target=self.passive_datacast, args=(i,))
                     datathreads.append(datacast_thread)
                     datacast_thread.start()
-                    # stagger the datacasting threads
-                    time.sleep(2)
             input_thread.start()
             command_thread.start()
             # broadcast_thread.start()
@@ -1123,7 +1165,7 @@ def gps_at_offset(lat, lon, head, x, y):
 
 def send_socket(port, msg):
     """ Send a message to a port (socket)."""
-
+    log_full.info('sending to udp socket')
     try:
         HOST = '127.0.0.1'
         s = socket.socket()
